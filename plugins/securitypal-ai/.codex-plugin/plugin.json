@@ -1,0 +1,37 @@
+{
+  "name": "securitypal-ai",
+  "version": "0.1.0",
+  "description": "SecurityPal AI workflows for customer Knowledge Library Q&A, audits, and document coverage checks.",
+  "author": {
+    "name": "SecurityPal",
+    "email": "support@securitypalhq.com",
+    "url": "https://www.securitypalhq.com"
+  },
+  "homepage": "https://www.securitypalhq.com",
+  "repository": "https://github.com/SecurityPal/securitypalai-codex-marketplace",
+  "license": "Proprietary",
+  "keywords": [
+    "securitypal",
+    "knowledge-library",
+    "security-questionnaires",
+    "customer-content"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "SecurityPal AI",
+    "shortDescription": "Ask and audit customer Knowledge Library content.",
+    "longDescription": "Answer customer security questions, audit Knowledge Library coverage, inspect expired or weak documents, and upload source documents through SecurityPal AI public endpoints.",
+    "developerName": "SecurityPal",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://www.securitypalhq.com",
+    "privacyPolicyURL": "https://www.securitypalhq.com/privacy-policy",
+    "termsOfServiceURL": "https://www.securitypalhq.com/terms-of-service",
+    "defaultPrompt": [
+      "List my accessible Knowledge Libraries.",
+      "Audit library 123 for stale documents.",
+      "Ask library 123 whether data is encrypted at rest."
+    ],
+    "brandColor": "#146C94"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "SecurityPal AI"
+  short_description: "Answer customer security questions and find gaps in SecurityPal knowledge libraries"
+  default_prompt: "Use $securitypal-ai to answer customer security questions, search knowledge-library content, and identify coverage gaps."

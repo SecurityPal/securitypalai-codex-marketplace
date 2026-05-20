@@ -1,0 +1,20 @@
+{
+  "name": "securitypalai-codex-marketplace",
+  "interface": {
+    "displayName": "SecurityPal AI Codex Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "securitypal-ai",
+      "source": {
+        "source": "local",
+        "path": "./plugins/securitypal-ai"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
