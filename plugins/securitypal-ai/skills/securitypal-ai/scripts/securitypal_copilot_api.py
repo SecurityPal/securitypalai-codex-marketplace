@@ -814,7 +814,8 @@ def _audit_library(
         documents_meta = {}
         document_response_error = _get_error_summary(error)
 
-    if capabilities["source_model"] == SOURCE_MODEL_RAG:
+    source_model = capabilities["source_model"]
+    if source_model == SOURCE_MODEL_RAG:
         try:
             instructions, instructions_meta = _fetch_paginated(
                 "/v1/copilot/get-instructions",
@@ -825,12 +826,6 @@ def _audit_library(
             instructions = []
             instructions_meta = {}
             instruction_response_error = _get_error_summary(error)
-    else:
-        instructions = []
-        instructions_meta = {}
-        instructions_skipped_reason = "Skipped for legacy source model"
-
-    if capabilities["source_model"] == SOURCE_MODEL_RAG:
         try:
             rag_enabled_response = _request(
                 "GET",
@@ -847,6 +842,9 @@ def _audit_library(
             rag_enabled = None
             rag_enabled_response_error = _get_error_summary(error)
     else:
+        instructions = []
+        instructions_meta = {}
+        instructions_skipped_reason = "Skipped for legacy source model"
         rag_enabled = False
         rag_enabled_response_error = None
 
@@ -888,7 +886,7 @@ def _audit_library(
         "id": library_id,
         "name": attributes.get("name"),
         "tags": _tag_names(_relationship_list(library, "tags")),
-        "source_model": capabilities["source_model"],
+        "source_model": source_model,
         "knowledge_library_v2_enabled": rag_enabled,
         "documents": audited_documents,
         "document_count": documents_meta.get("total_count", len(audited_documents)),
