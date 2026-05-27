@@ -107,6 +107,40 @@ python3 scripts/securitypal_copilot_api.py add-document --library-id 123 --file 
 
 If the caller is on the legacy source model, the uploaded document is usable by document-based KB answers after processing. If the caller is on the RAG source model, check document sync/indexing status before assuming it is available in RAG answers.
 
+### Update document metadata
+
+- `POST /v1/libraries/{library_id}/documents/{document_id}/update`
+- Body fields are optional; omitted fields are unchanged.
+
+```json
+{
+  "name": "SOC 2 Type II.pdf",
+  "description": "Current SOC 2 Type II report",
+  "tagIds": ["optional-tag-uuid"],
+  "ownerUserIds": [42],
+  "reviewCycle": 90,
+  "reviewedAt": "2026-05-01T00:00:00Z",
+  "reviewedByUserId": 42
+}
+```
+
+Passing `tagIds` replaces the document's full tag set. To remove one tag while preserving the others, fetch the document's current tags and submit the remaining tag IDs, or use the helper CLI's `remove-document-tag` command.
+
+### Delete document
+
+- `POST /v1/libraries/{library_id}/documents/{document_id}/delete`
+- Empty body.
+
+This permanently deletes the document. Confirm the `document_id` from `list-documents` before calling it.
+
+The helper CLI wraps document mutation flows:
+
+```bash
+python3 scripts/securitypal_copilot_api.py update-document --library-id 123 --document-id DOCUMENT_UUID --description "Current SOC 2 Type II report"
+python3 scripts/securitypal_copilot_api.py remove-document-tag --library-id 123 --document-id DOCUMENT_UUID --tag-id TAG_UUID
+python3 scripts/securitypal_copilot_api.py delete-document --library-id 123 --document-id DOCUMENT_UUID
+```
+
 ### Check Knowledge Library v2 / RAG availability
 
 - `GET /v1/copilot/check-knowledge-library-v2-enabled`
@@ -162,13 +196,13 @@ If the caller is on the legacy source model, the uploaded document is usable by 
 The helper CLI provides `answer-kb` as a routing command:
 
 ```bash
-python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?" --include-sources
+python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?"
 ```
 
 It calls `GET /v1/auth/me` first.
 
-- Legacy source model: routes to `POST /v1/copilot/answer`
-- RAG source model: routes to `POST /v1/copilot/answer-from-documents`
+- Legacy source model: routes to `POST /v1/copilot/answer`; `--include-sources`, `--include-library`, and `--include-tags` are supported.
+- RAG source model: routes to `POST /v1/copilot/answer-from-documents`; include flags are not available on that endpoint, so the helper exits with an explicit message when they are requested.
 
 ### Find expired documents
 

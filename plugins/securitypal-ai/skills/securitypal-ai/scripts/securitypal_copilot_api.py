@@ -17,8 +17,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from dateutil.relativedelta import relativedelta
-
 DEFAULT_BASE_URL = "https://app.securitypalhq.com/api"
 DEFAULT_PAGE_LIMIT = 50
 MAX_MARKDOWN_EXAMPLES = 10
@@ -31,6 +29,12 @@ PUBLIC_DOCUMENT_UPLOAD_URL_PATH = (
 )
 PUBLIC_DOCUMENT_FINALIZE_UPLOAD_PATH = (
     "/v1/libraries/{library_id}/documents/finalize-upload"
+)
+PUBLIC_DOCUMENT_UPDATE_PATH = (
+    "/v1/libraries/{library_id}/documents/{document_id}/update"
+)
+PUBLIC_DOCUMENT_DELETE_PATH = (
+    "/v1/libraries/{library_id}/documents/{document_id}/delete"
 )
 SIGNED_UPLOAD_TIMEOUT_SECONDS = 300
 SUCCESSFUL_RAG_SYNC_STATUSES = frozenset(
@@ -250,7 +254,7 @@ def _document_expiration(
     review_cycle = _review_cycle_days(attributes)
     reviewed_at = _parse_datetime(_attribute_value(attributes, "reviewed_at"))
     expiration_date = (
-        reviewed_at + relativedelta(days=review_cycle)
+        reviewed_at + dt.timedelta(days=review_cycle)
         if reviewed_at is not None and review_cycle is not None
         else None
     )
@@ -326,6 +330,95 @@ def _target_library_id(args: argparse.Namespace) -> int:
     return library_ids[0]
 
 
+def _extract_finalized_document_ids(finalize_response: Any) -> list[str]:
+    data = _jsonapi_data(finalize_response)
+    if isinstance(data, dict):
+        document_id = _resource_id(data)
+        return [document_id] if document_id is not None else []
+    if isinstance(data, list):
+        return [
+            document_id
+            for document in data
+            if (document_id := _resource_id(document)) is not None
+        ]
+    return []
+
+
+def _upload_dry_run_result(
+    *,
+    file_path: str,
+    file_name: str,
+    library_id: int,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    return {
+        "dry_run": True,
+        "library_id": library_id,
+        "file": {
+            "path": file_path,
+            "name": file_name,
+            "size_bytes": os.path.getsize(file_path),
+        },
+        "metadata": {
+            "tag_ids": args.tag_ids,
+            "owner_user_ids": args.owner_user_ids,
+            "review_cycle": args.review_cycle,
+            "reviewed_at": args.reviewed_at,
+            "reviewed_by_user_id": args.reviewed_by_user_id,
+        },
+        "planned_steps": [
+            "request_signed_upload_url",
+            "upload_file_to_signed_url",
+            "finalize_upload",
+            "check_uploaded_document_status",
+        ],
+    }
+
+
+def _build_post_upload_status(
+    *,
+    library_id: int,
+    document_ids: list[str],
+    source_model: str,
+) -> dict[str, Any]:
+    if source_model == SOURCE_MODEL_RAG:
+        return {
+            "documents": [],
+            "errors": [],
+            "skipped_reason": (
+                "Skipped immediate document status lookup for RAG source model; "
+                "document indexing is asynchronous. Use list-documents or "
+                "library-audit to check rag_corpus_sync_status after processing."
+            ),
+        }
+
+    documents: list[Any] = []
+    errors: list[dict[str, Any]] = []
+    for document_id in document_ids:
+        try:
+            documents.append(_find_document(library_id, document_id))
+        except ApiRequestError as error:
+            errors.append(
+                {
+                    "document_id": document_id,
+                    "error": _get_error_summary(error),
+                }
+            )
+        except SystemExit as error:
+            errors.append(
+                {
+                    "document_id": document_id,
+                    "error": str(error),
+                }
+            )
+
+    return {
+        "documents": documents,
+        "errors": errors,
+        "skipped_reason": None,
+    }
+
+
 def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
     file_path = os.path.abspath(os.path.expanduser(args.file))
     if not os.path.isfile(file_path):
@@ -333,6 +426,14 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
 
     library_id = _target_library_id(args)
     file_name = args.name or os.path.basename(file_path)
+    if args.dry_run:
+        return _upload_dry_run_result(
+            file_path=file_path,
+            file_name=file_name,
+            library_id=library_id,
+            args=args,
+        )
+
     me_response = _request("GET", "/v1/auth/me")
     capabilities = _build_kb_capabilities(me_response)
 
@@ -378,8 +479,13 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
             "reviewedByUserId": args.reviewed_by_user_id,
         },
     )
-
     source_model = capabilities["source_model"]
+    finalized_document_ids = _extract_finalized_document_ids(finalize_response)
+    post_upload_status = _build_post_upload_status(
+        library_id=library_id,
+        document_ids=finalized_document_ids,
+        source_model=source_model,
+    )
     if source_model == SOURCE_MODEL_RAG:
         availability_note = (
             "RAG answers depend on document sync/indexing after upload; check "
@@ -391,6 +497,7 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     return {
+        "dry_run": False,
         "source_model": source_model,
         "library_id": library_id,
         "uploaded_file": {
@@ -400,7 +507,94 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
             "gcs_path": gcs_path,
         },
         "finalize_response": finalize_response,
+        "finalized_document_ids": finalized_document_ids,
+        "post_upload_status": post_upload_status,
         "availability_note": availability_note,
+    }
+
+
+def _document_tag_ids(document: Any) -> list[str]:
+    tag_ids: list[str] = []
+    for tag in _relationship_list(document, "tags"):
+        tag_id = _resource_id(tag)
+        if tag_id is not None:
+            tag_ids.append(tag_id)
+    return tag_ids
+
+
+def _find_document(library_id: int, document_id: str) -> Any:
+    documents, _ = _fetch_paginated(
+        "/v1/copilot/get-documents",
+        query={"libraryId": library_id},
+        page_limit=DEFAULT_PAGE_LIMIT,
+    )
+    for document in documents:
+        if _resource_id(document) == document_id:
+            return document
+    raise SystemExit(f"Document {document_id} was not found in library {library_id}")
+
+
+def _update_document(
+    *,
+    library_id: int,
+    document_id: str,
+    payload: dict[str, Any],
+) -> Any:
+    return _request(
+        "POST",
+        PUBLIC_DOCUMENT_UPDATE_PATH.format(
+            library_id=library_id,
+            document_id=document_id,
+        ),
+        payload=payload,
+    )
+
+
+def _build_update_document_result(args: argparse.Namespace) -> dict[str, Any]:
+    payload = {
+        "name": args.name,
+        "description": args.description,
+        "tagIds": args.tag_ids,
+        "ownerUserIds": args.owner_user_ids,
+        "reviewCycle": args.review_cycle,
+        "reviewedAt": args.reviewed_at,
+        "reviewedByUserId": args.reviewed_by_user_id,
+    }
+    response = _update_document(
+        library_id=args.library_id,
+        document_id=args.document_id,
+        payload=payload,
+    )
+    return {
+        "library_id": args.library_id,
+        "document_id": args.document_id,
+        "updated_fields": sorted(
+            key for key, value in payload.items() if value is not None
+        ),
+        "response": response,
+    }
+
+
+def _build_remove_document_tag_result(args: argparse.Namespace) -> dict[str, Any]:
+    document = _find_document(args.library_id, args.document_id)
+    existing_tag_ids = _document_tag_ids(document)
+    tag_ids_to_remove = set(args.tag_ids)
+    remaining_tag_ids = [
+        tag_id for tag_id in existing_tag_ids if tag_id not in tag_ids_to_remove
+    ]
+    missing_tag_ids = sorted(tag_ids_to_remove - set(existing_tag_ids))
+    response = _update_document(
+        library_id=args.library_id,
+        document_id=args.document_id,
+        payload={"tagIds": remaining_tag_ids},
+    )
+    return {
+        "library_id": args.library_id,
+        "document_id": args.document_id,
+        "removed_tag_ids": sorted(set(existing_tag_ids) - set(remaining_tag_ids)),
+        "missing_tag_ids": missing_tag_ids,
+        "remaining_tag_ids": remaining_tag_ids,
+        "response": response,
     }
 
 
@@ -593,6 +787,7 @@ def _audit_library(
     *,
     page_limit: int,
     as_of: dt.datetime,
+    capabilities: dict[str, Any],
 ) -> dict[str, Any]:
     library_id = _resource_id(library)
     attributes = _resource_attributes(library)
@@ -605,6 +800,7 @@ def _audit_library(
 
     document_response_error: dict[str, Any] | None = None
     instruction_response_error: dict[str, Any] | None = None
+    instructions_skipped_reason: str | None = None
     rag_enabled_response_error: dict[str, Any] | None = None
 
     try:
@@ -618,32 +814,41 @@ def _audit_library(
         documents_meta = {}
         document_response_error = _get_error_summary(error)
 
-    try:
-        instructions, instructions_meta = _fetch_paginated(
-            "/v1/copilot/get-instructions",
-            query={"libraryId": library_id},
-            page_limit=page_limit,
-        )
-    except ApiRequestError as error:
+    if capabilities["source_model"] == SOURCE_MODEL_RAG:
+        try:
+            instructions, instructions_meta = _fetch_paginated(
+                "/v1/copilot/get-instructions",
+                query={"libraryId": library_id},
+                page_limit=page_limit,
+            )
+        except ApiRequestError as error:
+            instructions = []
+            instructions_meta = {}
+            instruction_response_error = _get_error_summary(error)
+    else:
         instructions = []
         instructions_meta = {}
-        instruction_response_error = _get_error_summary(error)
+        instructions_skipped_reason = "Skipped for legacy source model"
 
-    try:
-        rag_enabled_response = _request(
-            "GET",
-            "/v1/copilot/check-knowledge-library-v2-enabled",
-            query={"libraryId": library_id},
-            exit_on_error=False,
-        )
-        rag_enabled_data = _jsonapi_data(rag_enabled_response)
-        rag_enabled_attributes = _resource_attributes(rag_enabled_data)
-        rag_enabled = _attribute_value(
-            rag_enabled_attributes, "knowledge_library_v2_enabled"
-        )
-    except ApiRequestError as error:
-        rag_enabled = None
-        rag_enabled_response_error = _get_error_summary(error)
+    if capabilities["source_model"] == SOURCE_MODEL_RAG:
+        try:
+            rag_enabled_response = _request(
+                "GET",
+                "/v1/copilot/check-knowledge-library-v2-enabled",
+                query={"libraryId": library_id},
+                exit_on_error=False,
+            )
+            rag_enabled_data = _jsonapi_data(rag_enabled_response)
+            rag_enabled_attributes = _resource_attributes(rag_enabled_data)
+            rag_enabled = _attribute_value(
+                rag_enabled_attributes, "knowledge_library_v2_enabled"
+            )
+        except ApiRequestError as error:
+            rag_enabled = None
+            rag_enabled_response_error = _get_error_summary(error)
+    else:
+        rag_enabled = False
+        rag_enabled_response_error = None
 
     duplicate_document_keys: dict[str, int] = defaultdict(int)
     for document in documents:
@@ -683,6 +888,7 @@ def _audit_library(
         "id": library_id,
         "name": attributes.get("name"),
         "tags": _tag_names(_relationship_list(library, "tags")),
+        "source_model": capabilities["source_model"],
         "knowledge_library_v2_enabled": rag_enabled,
         "documents": audited_documents,
         "document_count": documents_meta.get("total_count", len(audited_documents)),
@@ -695,6 +901,7 @@ def _audit_library(
         ),
         "instruction_issue_counts": _count_issues(audited_instructions),
         "instructions_error": instruction_response_error,
+        "instructions_skipped_reason": instructions_skipped_reason,
         "rag_enabled_error": rag_enabled_response_error,
     }
 
@@ -706,6 +913,8 @@ def _build_library_audit(args: argparse.Namespace) -> dict[str, Any]:
     if args.page_limit < 1:
         raise SystemExit("--page-limit must be at least 1")
 
+    me_response = _request("GET", "/v1/auth/me")
+    capabilities = _build_kb_capabilities(me_response)
     libraries_response = _request(
         "GET",
         "/v1/libraries/",
@@ -737,9 +946,82 @@ def _build_library_audit(args: argparse.Namespace) -> dict[str, Any]:
                 library,
                 page_limit=args.page_limit,
                 as_of=as_of,
+                capabilities=capabilities,
             )
             for library in libraries
         ],
+    }
+
+
+def _build_check_auth() -> dict[str, Any]:
+    token = os.environ.get("SECURITYPAL_API_TOKEN")
+    checks: list[dict[str, Any]] = [
+        {
+            "name": "environment",
+            "ok": bool(token),
+            "base_url": _base_url(),
+            "token_present": bool(token),
+        }
+    ]
+    if not token:
+        return {
+            "ok": False,
+            "base_url": _base_url(),
+            "checks": checks,
+        }
+
+    try:
+        me_response = _request("GET", "/v1/auth/me", exit_on_error=False)
+        capabilities = _build_kb_capabilities(me_response)
+        checks.append({"name": "auth/me", "ok": True})
+    except ApiRequestError as error:
+        return {
+            "ok": False,
+            "base_url": _base_url(),
+            "checks": [
+                *checks,
+                {
+                    "name": "auth/me",
+                    "ok": False,
+                    "error": _get_error_summary(error),
+                },
+            ],
+        }
+
+    try:
+        libraries_response = _request(
+            "GET",
+            "/v1/libraries/",
+            query={"includeTags": "true"},
+            exit_on_error=False,
+        )
+        libraries_data = _jsonapi_data(libraries_response)
+        accessible_libraries = (
+            libraries_data if isinstance(libraries_data, list) else []
+        )
+        checks.append(
+            {
+                "name": "accessible_libraries",
+                "ok": isinstance(libraries_data, list),
+                "count": len(accessible_libraries),
+                "examples": accessible_libraries[:MAX_GAP_EXAMPLES],
+            }
+        )
+    except ApiRequestError as error:
+        checks.append(
+            {
+                "name": "accessible_libraries",
+                "ok": False,
+                "error": _get_error_summary(error),
+            }
+        )
+
+    return {
+        "ok": all(bool(check["ok"]) for check in checks),
+        "base_url": _base_url(),
+        "account": me_response,
+        "capabilities": capabilities,
+        "checks": checks,
     }
 
 
@@ -1262,6 +1544,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("me", help="Get authenticated user and feature flags.")
 
     subparsers.add_parser(
+        "check-auth",
+        help="Validate token, base URL, source model, and accessible libraries.",
+    )
+    subparsers.add_parser(
+        "doctor",
+        help="Alias for check-auth.",
+    )
+
+    subparsers.add_parser(
         "kb-capabilities",
         help="Detect the Knowledge Library source model from auth/me.",
     )
@@ -1437,6 +1728,50 @@ def build_parser() -> argparse.ArgumentParser:
     add_document.add_argument("--review-cycle", type=int)
     add_document.add_argument("--reviewed-at")
     add_document.add_argument("--reviewed-by-user-id", type=int)
+    add_document.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate local inputs and print planned upload steps without API calls.",
+    )
+
+    delete_document = subparsers.add_parser(
+        "delete-document",
+        help="Delete one Knowledge Library document.",
+    )
+    delete_document.add_argument("--library-id", type=int, required=True)
+    delete_document.add_argument("--document-id", required=True)
+
+    update_document = subparsers.add_parser(
+        "update-document",
+        help="Update Knowledge Library document metadata.",
+    )
+    update_document.add_argument("--library-id", type=int, required=True)
+    update_document.add_argument("--document-id", required=True)
+    update_document.add_argument("--name")
+    update_document.add_argument("--description")
+    update_document.add_argument("--tag-id", action="append", dest="tag_ids")
+    update_document.add_argument(
+        "--owner-user-id",
+        type=int,
+        action="append",
+        dest="owner_user_ids",
+    )
+    update_document.add_argument("--review-cycle", type=int)
+    update_document.add_argument("--reviewed-at")
+    update_document.add_argument("--reviewed-by-user-id", type=int)
+
+    remove_document_tag = subparsers.add_parser(
+        "remove-document-tag",
+        help="Remove one or more tags from a Knowledge Library document.",
+    )
+    remove_document_tag.add_argument("--library-id", type=int, required=True)
+    remove_document_tag.add_argument("--document-id", required=True)
+    remove_document_tag.add_argument(
+        "--tag-id",
+        action="append",
+        required=True,
+        dest="tag_ids",
+    )
 
     get_autocomplete = subparsers.add_parser(
         "get-autocomplete",
@@ -1462,6 +1797,8 @@ def main() -> None:
         )
     elif args.command == "me":
         result = _request("GET", "/v1/auth/me")
+    elif args.command in {"check-auth", "doctor"}:
+        result = _build_check_auth()
     elif args.command == "kb-capabilities":
         me_response = _request("GET", "/v1/auth/me")
         result = _build_kb_capabilities(me_response)
@@ -1550,6 +1887,13 @@ def main() -> None:
         me_response = _request("GET", "/v1/auth/me")
         capabilities = _build_kb_capabilities(me_response)
         if capabilities["source_model"] == SOURCE_MODEL_RAG:
+            if args.include_sources or args.include_library or args.include_tags:
+                raise SystemExit(
+                    "answer-kb include flags are only supported by the legacy "
+                    "answer endpoint. The RAG source model routes to "
+                    "answer-from-documents, which does not expose includeSources, "
+                    "includeLibrary, or includeTags."
+                )
             result = _request(
                 "POST",
                 "/v1/copilot/answer-from-documents",
@@ -1575,6 +1919,19 @@ def main() -> None:
             )
     elif args.command == "add-document":
         result = _build_add_document_result(args)
+    elif args.command == "delete-document":
+        result = _request(
+            "POST",
+            PUBLIC_DOCUMENT_DELETE_PATH.format(
+                library_id=args.library_id,
+                document_id=args.document_id,
+            ),
+            payload={},
+        )
+    elif args.command == "update-document":
+        result = _build_update_document_result(args)
+    elif args.command == "remove-document-tag":
+        result = _build_remove_document_tag_result(args)
     elif args.command == "get-autocomplete":
         result = _request(
             "GET",

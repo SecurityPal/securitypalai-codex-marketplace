@@ -1,6 +1,6 @@
 ---
 name: securitypal-ai
-description: Answer customer security questions, audit knowledge-library coverage, and find gaps in a customer's SecurityPal content. Use when Codex needs to ask SecurityPal AI questions, search source documents, list libraries, inspect tags and instruction sets, identify expired or under-described documents, verify Knowledge Library capabilities, or retrieve customer-specific autocomplete suggestions.
+description: Answer customer security questions, audit knowledge-library coverage, and find gaps in a customer's SecurityPal content. Use when Codex needs to ask SecurityPal AI questions, search source documents, list libraries, inspect tags and instruction sets, add, update, delete, or retag Knowledge Library documents, identify expired or under-described documents, verify Knowledge Library capabilities, or retrieve customer-specific autocomplete suggestions.
 ---
 
 # SecurityPal AI
@@ -22,6 +22,7 @@ export SECURITYPAL_API_TOKEN='your_customer_token_here'
 
 ```bash
 python3 scripts/securitypal_copilot_api.py me
+python3 scripts/securitypal_copilot_api.py check-auth
 python3 scripts/securitypal_copilot_api.py kb-capabilities
 ```
 
@@ -41,6 +42,7 @@ python3 scripts/securitypal_copilot_api.py list-libraries
    - If needed, run `list-tags`, `list-documents`, `list-instructions`, `list-memories`, or `rag-enabled`
    - Use `library-audit` when the user wants to understand what is in a customer's Knowledge Library or what needs cleanup.
 6. Choose the narrowest SecurityPal AI endpoint or workflow that matches the task:
+   - Use `answer-kb` for customer-security, compliance, policy, control, questionnaire, or trust-center questions whenever a library is known, even if the user does not explicitly say "Knowledge Library"
    - Use `library-audit` for read-only document/instruction inventory and hygiene reports
    - Use `expired-documents` when the user asks what documents are expired or need review
    - Use `knowledge-gaps` when the user asks what is missing for a topic
@@ -49,6 +51,9 @@ python3 scripts/securitypal_copilot_api.py list-libraries
    - Use `search` when the request should be constrained to specific document IDs
    - Use `answer-from-documents` for RAG document questions when `knowledge-library-rag-based-enabled` is enabled
    - Use `add-document` when the user asks to add or upload a Knowledge Library document and their token can access the signed upload and finalize endpoints
+   - Use `update-document` when the user asks to update document name, description, tags, owners, review cycle, or review date
+   - Use `remove-document-tag` when the user asks to remove specific tags while preserving the document's other tags
+   - Use `delete-document` when the user explicitly asks to delete a Knowledge Library document; confirm the target document ID first because deletion is irreversible
    - Use `get-autocomplete` to fetch previously generated autocomplete results
 7. Summarize the result for the user and include relevant IDs, source metadata, and follow-up options.
 
@@ -68,8 +73,12 @@ Use `auth/me` as the source of truth for source-model routing.
 For broad questions like "Based on my knowledge library, do we encrypt data at rest?", prefer:
 
 ```bash
-python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do we encrypt data at rest?" --include-sources
+python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do we encrypt data at rest?"
 ```
+
+Also use `answer-kb` for broad security questions that imply customer knowledge, such as "Do we encrypt data at rest?", "What is our incident response process?", or "Can you answer this vendor questionnaire item?" Do not wait for the user to spell out "search the Knowledge Library" once the token and target library are available.
+
+`answer-kb --include-sources`, `--include-library`, and `--include-tags` are legacy-answer options only. When `auth/me` reports the RAG source model, `answer-kb` routes to `answer-from-documents`; that endpoint does not expose those include flags, so the helper exits with an explicit message if they are requested.
 
 ## Token Handling
 
@@ -84,10 +93,10 @@ When the token or library ID is missing, use this sequence:
 
 ```bash
 export SECURITYPAL_API_TOKEN='your_customer_token_here'
-python3 scripts/securitypal_copilot_api.py me
+python3 scripts/securitypal_copilot_api.py check-auth
 python3 scripts/securitypal_copilot_api.py kb-capabilities
 python3 scripts/securitypal_copilot_api.py list-libraries
-python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?" --include-sources
+python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?"
 ```
 
 If the user does not know the correct library, never guess. List libraries first and let the returned IDs drive later requests.
@@ -99,16 +108,20 @@ Use the helper script for JSON endpoints:
 ```bash
 python3 scripts/securitypal_copilot_api.py list-libraries
 python3 scripts/securitypal_copilot_api.py me
+python3 scripts/securitypal_copilot_api.py check-auth
 python3 scripts/securitypal_copilot_api.py kb-capabilities
 python3 scripts/securitypal_copilot_api.py list-tags --library-id 123
 python3 scripts/securitypal_copilot_api.py list-documents --library-id 123 --limit 20
 python3 scripts/securitypal_copilot_api.py list-memories --library-id 123
 python3 scripts/securitypal_copilot_api.py add-document --library-id 123 --file /absolute/path/policy.pdf --tag-id TAG_UUID
+python3 scripts/securitypal_copilot_api.py update-document --library-id 123 --document-id DOCUMENT_UUID --description "Current SOC 2 Type II report" --tag-id TAG_UUID --review-cycle 90 --reviewed-at 2026-05-01T00:00:00Z
+python3 scripts/securitypal_copilot_api.py remove-document-tag --library-id 123 --document-id DOCUMENT_UUID --tag-id TAG_UUID
+python3 scripts/securitypal_copilot_api.py delete-document --library-id 123 --document-id DOCUMENT_UUID
 python3 scripts/securitypal_copilot_api.py library-audit --library-id 123 --format markdown
 python3 scripts/securitypal_copilot_api.py library-audit --format json
 python3 scripts/securitypal_copilot_api.py expired-documents --library-id 123 --format markdown
 python3 scripts/securitypal_copilot_api.py knowledge-gaps --library-id 123 --topic "data retention"
-python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?" --include-sources
+python3 scripts/securitypal_copilot_api.py answer-kb --library-id 123 --question "Do you encrypt data at rest?"
 python3 scripts/securitypal_copilot_api.py answer --library-id 123 --question "Do you encrypt data at rest?" --include-sources
 python3 scripts/securitypal_copilot_api.py search --library-id 123 --question "How is SSO enforced?" --document-id 11111111-1111-1111-1111-111111111111
 python3 scripts/securitypal_copilot_api.py answer-from-documents --library-id 123 --question "Summarize incident response testing."
@@ -171,6 +184,12 @@ Example:
 python3 scripts/securitypal_copilot_api.py add-document --library-id 123 --file /absolute/path/policy.pdf
 ```
 
+Preview the upload without API calls first when you want a confirmation-oriented workflow:
+
+```bash
+python3 scripts/securitypal_copilot_api.py add-document --library-id 123 --file /absolute/path/policy.pdf --dry-run
+```
+
 Optional metadata:
 
 ```bash
@@ -188,6 +207,45 @@ After upload, route follow-up expectations by source model:
 
 - Legacy: the document should become available to document-based KB answers once upload processing completes.
 - RAG: document sync/indexing status matters; check `rag_corpus_sync_status` with `list-documents` or `library-audit`.
+
+The helper also attempts a post-upload document status lookup for finalized document IDs and includes the result in `post_upload_status`.
+
+## Document Updates and Deletions
+
+Before mutating a document, discover the exact library and document IDs:
+
+```bash
+python3 scripts/securitypal_copilot_api.py list-documents --library-id 123 --limit 50
+python3 scripts/securitypal_copilot_api.py list-tags --library-id 123
+```
+
+Use `update-document` to replace provided metadata fields while leaving omitted fields unchanged:
+
+```bash
+python3 scripts/securitypal_copilot_api.py update-document \
+  --library-id 123 \
+  --document-id DOCUMENT_UUID \
+  --description "Current SOC 2 Type II report" \
+  --tag-id TAG_UUID \
+  --review-cycle 90 \
+  --reviewed-at 2026-05-01T00:00:00Z \
+  --reviewed-by-user-id 42
+```
+
+Passing one or more `--tag-id` values replaces the document's tag set. To remove specific tags and preserve all others, use:
+
+```bash
+python3 scripts/securitypal_copilot_api.py remove-document-tag \
+  --library-id 123 \
+  --document-id DOCUMENT_UUID \
+  --tag-id TAG_UUID
+```
+
+Use `delete-document` only after confirming the exact document ID:
+
+```bash
+python3 scripts/securitypal_copilot_api.py delete-document --library-id 123 --document-id DOCUMENT_UUID
+```
 
 ## Multipart Endpoints
 
