@@ -1783,27 +1783,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+def dispatch(command: str, args: argparse.Namespace) -> Any:
+    """Run one CLI subcommand and return its result.
 
-    if args.command == "list-libraries":
-        result = _request(
+    Shared by the CLI entry point and the MCP server so both drive the same
+    logic through the same argparse-produced ``args`` namespace.
+    """
+    if command == "list-libraries":
+        return _request(
             "GET",
             "/v1/libraries/",
             query={"includeTags": str(args.include_tags).lower()},
         )
-    elif args.command == "me":
-        result = _request("GET", "/v1/auth/me")
-    elif args.command in {"check-auth", "doctor"}:
-        result = _build_check_auth()
-    elif args.command == "kb-capabilities":
+    elif command == "me":
+        return _request("GET", "/v1/auth/me")
+    elif command in {"check-auth", "doctor"}:
+        return _build_check_auth()
+    elif command == "kb-capabilities":
         me_response = _request("GET", "/v1/auth/me")
-        result = _build_kb_capabilities(me_response)
-    elif args.command == "list-tags":
-        result = _request("GET", f"/v1/libraries/{args.library_id}/tags")
-    elif args.command == "list-documents":
-        result = _request(
+        return _build_kb_capabilities(me_response)
+    elif command == "list-tags":
+        return _request("GET", f"/v1/libraries/{args.library_id}/tags")
+    elif command == "list-documents":
+        return _request(
             "GET",
             "/v1/copilot/get-documents",
             query={
@@ -1812,8 +1814,8 @@ def main() -> None:
                 "limit": args.limit,
             },
         )
-    elif args.command == "list-instructions":
-        result = _request(
+    elif command == "list-instructions":
+        return _request(
             "GET",
             "/v1/copilot/get-instructions",
             query={
@@ -1822,32 +1824,26 @@ def main() -> None:
                 "limit": args.limit,
             },
         )
-    elif args.command == "list-memories":
-        result = _request(
+    elif command == "list-memories":
+        return _request(
             "GET",
             "/v1/copilot/get-memory",
             query={"productId": args.library_id},
         )
-    elif args.command == "rag-enabled":
-        result = _request(
+    elif command == "rag-enabled":
+        return _request(
             "GET",
             "/v1/copilot/check-knowledge-library-v2-enabled",
             query={"libraryId": args.library_id},
         )
-    elif args.command == "library-audit":
-        result = _build_library_audit(args)
-        if args.format == "markdown":
-            _print_library_audit_markdown(result)
-            return
-    elif args.command == "expired-documents":
-        result = _build_expired_documents(args)
-        if args.format == "markdown":
-            _print_expired_documents_markdown(result)
-            return
-    elif args.command == "knowledge-gaps":
-        result = _build_knowledge_gaps(args)
-    elif args.command == "answer":
-        result = _request(
+    elif command == "library-audit":
+        return _build_library_audit(args)
+    elif command == "expired-documents":
+        return _build_expired_documents(args)
+    elif command == "knowledge-gaps":
+        return _build_knowledge_gaps(args)
+    elif command == "answer":
+        return _request(
             "POST",
             "/v1/copilot/answer",
             payload={
@@ -1860,8 +1856,8 @@ def main() -> None:
                 "includeTags": args.include_tags,
             },
         )
-    elif args.command == "search":
-        result = _request(
+    elif command == "search":
+        return _request(
             "POST",
             "/v1/copilot/search",
             payload={
@@ -1871,8 +1867,8 @@ def main() -> None:
                 "documentIds": args.document_ids,
             },
         )
-    elif args.command == "answer-from-documents":
-        result = _request(
+    elif command == "answer-from-documents":
+        return _request(
             "POST",
             "/v1/copilot/answer-from-documents",
             payload={
@@ -1881,7 +1877,7 @@ def main() -> None:
                 "instruction": args.instruction,
             },
         )
-    elif args.command == "answer-kb":
+    elif command == "answer-kb":
         me_response = _request("GET", "/v1/auth/me")
         capabilities = _build_kb_capabilities(me_response)
         if capabilities["source_model"] == SOURCE_MODEL_RAG:
@@ -1892,7 +1888,7 @@ def main() -> None:
                     "answer-from-documents, which does not expose includeSources, "
                     "includeLibrary, or includeTags."
                 )
-            result = _request(
+            return _request(
                 "POST",
                 "/v1/copilot/answer-from-documents",
                 payload={
@@ -1901,24 +1897,23 @@ def main() -> None:
                     "instruction": args.instruction,
                 },
             )
-        else:
-            result = _request(
-                "POST",
-                "/v1/copilot/answer",
-                payload={
-                    "libraryId": args.library_id,
-                    "question": args.question,
-                    "instruction": args.instruction,
-                    "tagIds": args.tag_ids,
-                    "includeSources": args.include_sources,
-                    "includeLibrary": args.include_library,
-                    "includeTags": args.include_tags,
-                },
-            )
-    elif args.command == "add-document":
-        result = _build_add_document_result(args)
-    elif args.command == "delete-document":
-        result = _request(
+        return _request(
+            "POST",
+            "/v1/copilot/answer",
+            payload={
+                "libraryId": args.library_id,
+                "question": args.question,
+                "instruction": args.instruction,
+                "tagIds": args.tag_ids,
+                "includeSources": args.include_sources,
+                "includeLibrary": args.include_library,
+                "includeTags": args.include_tags,
+            },
+        )
+    elif command == "add-document":
+        return _build_add_document_result(args)
+    elif command == "delete-document":
+        return _request(
             "POST",
             PUBLIC_DOCUMENT_DELETE_PATH.format(
                 library_id=args.library_id,
@@ -1926,12 +1921,12 @@ def main() -> None:
             ),
             payload={},
         )
-    elif args.command == "update-document":
-        result = _build_update_document_result(args)
-    elif args.command == "remove-document-tag":
-        result = _build_remove_document_tag_result(args)
-    elif args.command == "get-autocomplete":
-        result = _request(
+    elif command == "update-document":
+        return _build_update_document_result(args)
+    elif command == "remove-document-tag":
+        return _build_remove_document_tag_result(args)
+    elif command == "get-autocomplete":
+        return _request(
             "GET",
             "/v1/copilot/request-autocomplete",
             query={
@@ -1942,7 +1937,20 @@ def main() -> None:
             },
         )
     else:
-        raise SystemExit(f"Unsupported command: {args.command}")
+        raise SystemExit(f"Unsupported command: {command}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    result = dispatch(args.command, args)
+
+    if args.command == "library-audit" and args.format == "markdown":
+        _print_library_audit_markdown(result)
+        return
+    if args.command == "expired-documents" and args.format == "markdown":
+        _print_expired_documents_markdown(result)
+        return
 
     _print_json(result)
 
