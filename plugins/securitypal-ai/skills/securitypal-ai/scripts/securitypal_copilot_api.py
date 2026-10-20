@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Helper CLI for SecurityPal AI public APIs."""
 
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +20,8 @@ from dataclasses import dataclass
 from typing import Any
 
 DEFAULT_BASE_URL = "https://app.securitypalhq.com/api"
+PUBLIC_API_VERSION = "2026-08-07"
+PUBLIC_API_VERSION_HEADER = "X-API-Version"
 DEFAULT_PAGE_LIMIT = 50
 MAX_MARKDOWN_EXAMPLES = 10
 MAX_GAP_EXAMPLES = 5
@@ -94,6 +98,7 @@ def _request(
     headers = {
         "Authorization": f"Bearer {_token()}",
         "Accept": "application/json",
+        PUBLIC_API_VERSION_HEADER: PUBLIC_API_VERSION,
     }
     if payload is not None:
         filtered_payload = {k: v for k, v in payload.items() if v is not None}
@@ -113,7 +118,7 @@ def _request(
         )
         if not exit_on_error:
             raise error from exc
-        sys.stderr.write(json.dumps(error.as_dict(), indent=2, sort_keys=True) + "\n")
+        print(json.dumps(error.as_dict(), indent=2, sort_keys=True), file=sys.stderr)
         raise SystemExit(1) from exc
     except urllib.error.URLError as exc:
         if not exit_on_error:
@@ -137,7 +142,7 @@ def _maybe_json(body: str) -> Any:
 
 
 def _print_json(data: Any) -> None:
-    sys.stdout.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(data, indent=2, sort_keys=True))
 
 
 def _jsonapi_data(response: Any) -> Any:
@@ -461,7 +466,7 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
     try:
         _upload_file_to_signed_url(upload_url, file_path)
     except ApiRequestError as error:
-        sys.stderr.write(json.dumps(error.as_dict(), indent=2, sort_keys=True) + "\n")
+        print(json.dumps(error.as_dict(), indent=2, sort_keys=True), file=sys.stderr)
         raise SystemExit(1) from error
 
     finalize_path = PUBLIC_DOCUMENT_FINALIZE_UPLOAD_PATH.format(library_id=library_id)
@@ -1470,7 +1475,7 @@ def _print_library_audit_markdown(audit: dict[str, Any]) -> None:
         if instruction_examples:
             lines.extend(["### Instruction Examples", "", *instruction_examples, ""])
 
-    sys.stdout.write("\n".join(lines).rstrip() + "\n")
+    print("\n".join(lines).rstrip())
 
 
 def _print_expired_documents_markdown(report: dict[str, Any]) -> None:
@@ -1525,7 +1530,7 @@ def _print_expired_documents_markdown(report: dict[str, Any]) -> None:
         if library.get("documents"):
             lines.append("")
 
-    sys.stdout.write("\n".join(lines).rstrip() + "\n")
+    print("\n".join(lines).rstrip())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1783,29 +1788,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def dispatch(command: str, args: argparse.Namespace) -> Any:
-    """Run one CLI subcommand and return its result.
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
 
-    Shared by the CLI entry point and the MCP server so both drive the same
-    logic through the same argparse-produced ``args`` namespace.
-    """
-    if command == "list-libraries":
-        return _request(
+    if args.command == "list-libraries":
+        result = _request(
             "GET",
             "/v1/libraries/",
             query={"includeTags": str(args.include_tags).lower()},
         )
-    elif command == "me":
-        return _request("GET", "/v1/auth/me")
-    elif command in {"check-auth", "doctor"}:
-        return _build_check_auth()
-    elif command == "kb-capabilities":
+    elif args.command == "me":
+        result = _request("GET", "/v1/auth/me")
+    elif args.command in {"check-auth", "doctor"}:
+        result = _build_check_auth()
+    elif args.command == "kb-capabilities":
         me_response = _request("GET", "/v1/auth/me")
-        return _build_kb_capabilities(me_response)
-    elif command == "list-tags":
-        return _request("GET", f"/v1/libraries/{args.library_id}/tags")
-    elif command == "list-documents":
-        return _request(
+        result = _build_kb_capabilities(me_response)
+    elif args.command == "list-tags":
+        result = _request("GET", f"/v1/libraries/{args.library_id}/tags")
+    elif args.command == "list-documents":
+        result = _request(
             "GET",
             "/v1/copilot/get-documents",
             query={
@@ -1814,8 +1817,8 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                 "limit": args.limit,
             },
         )
-    elif command == "list-instructions":
-        return _request(
+    elif args.command == "list-instructions":
+        result = _request(
             "GET",
             "/v1/copilot/get-instructions",
             query={
@@ -1824,26 +1827,32 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                 "limit": args.limit,
             },
         )
-    elif command == "list-memories":
-        return _request(
+    elif args.command == "list-memories":
+        result = _request(
             "GET",
             "/v1/copilot/get-memory",
             query={"productId": args.library_id},
         )
-    elif command == "rag-enabled":
-        return _request(
+    elif args.command == "rag-enabled":
+        result = _request(
             "GET",
             "/v1/copilot/check-knowledge-library-v2-enabled",
             query={"libraryId": args.library_id},
         )
-    elif command == "library-audit":
-        return _build_library_audit(args)
-    elif command == "expired-documents":
-        return _build_expired_documents(args)
-    elif command == "knowledge-gaps":
-        return _build_knowledge_gaps(args)
-    elif command == "answer":
-        return _request(
+    elif args.command == "library-audit":
+        result = _build_library_audit(args)
+        if args.format == "markdown":
+            _print_library_audit_markdown(result)
+            return
+    elif args.command == "expired-documents":
+        result = _build_expired_documents(args)
+        if args.format == "markdown":
+            _print_expired_documents_markdown(result)
+            return
+    elif args.command == "knowledge-gaps":
+        result = _build_knowledge_gaps(args)
+    elif args.command == "answer":
+        result = _request(
             "POST",
             "/v1/copilot/answer",
             payload={
@@ -1856,8 +1865,8 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                 "includeTags": args.include_tags,
             },
         )
-    elif command == "search":
-        return _request(
+    elif args.command == "search":
+        result = _request(
             "POST",
             "/v1/copilot/search",
             payload={
@@ -1867,8 +1876,8 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                 "documentIds": args.document_ids,
             },
         )
-    elif command == "answer-from-documents":
-        return _request(
+    elif args.command == "answer-from-documents":
+        result = _request(
             "POST",
             "/v1/copilot/answer-from-documents",
             payload={
@@ -1877,7 +1886,7 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                 "instruction": args.instruction,
             },
         )
-    elif command == "answer-kb":
+    elif args.command == "answer-kb":
         me_response = _request("GET", "/v1/auth/me")
         capabilities = _build_kb_capabilities(me_response)
         if capabilities["source_model"] == SOURCE_MODEL_RAG:
@@ -1888,7 +1897,7 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                     "answer-from-documents, which does not expose includeSources, "
                     "includeLibrary, or includeTags."
                 )
-            return _request(
+            result = _request(
                 "POST",
                 "/v1/copilot/answer-from-documents",
                 payload={
@@ -1897,23 +1906,24 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
                     "instruction": args.instruction,
                 },
             )
-        return _request(
-            "POST",
-            "/v1/copilot/answer",
-            payload={
-                "libraryId": args.library_id,
-                "question": args.question,
-                "instruction": args.instruction,
-                "tagIds": args.tag_ids,
-                "includeSources": args.include_sources,
-                "includeLibrary": args.include_library,
-                "includeTags": args.include_tags,
-            },
-        )
-    elif command == "add-document":
-        return _build_add_document_result(args)
-    elif command == "delete-document":
-        return _request(
+        else:
+            result = _request(
+                "POST",
+                "/v1/copilot/answer",
+                payload={
+                    "libraryId": args.library_id,
+                    "question": args.question,
+                    "instruction": args.instruction,
+                    "tagIds": args.tag_ids,
+                    "includeSources": args.include_sources,
+                    "includeLibrary": args.include_library,
+                    "includeTags": args.include_tags,
+                },
+            )
+    elif args.command == "add-document":
+        result = _build_add_document_result(args)
+    elif args.command == "delete-document":
+        result = _request(
             "POST",
             PUBLIC_DOCUMENT_DELETE_PATH.format(
                 library_id=args.library_id,
@@ -1921,12 +1931,12 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
             ),
             payload={},
         )
-    elif command == "update-document":
-        return _build_update_document_result(args)
-    elif command == "remove-document-tag":
-        return _build_remove_document_tag_result(args)
-    elif command == "get-autocomplete":
-        return _request(
+    elif args.command == "update-document":
+        result = _build_update_document_result(args)
+    elif args.command == "remove-document-tag":
+        result = _build_remove_document_tag_result(args)
+    elif args.command == "get-autocomplete":
+        result = _request(
             "GET",
             "/v1/copilot/request-autocomplete",
             query={
@@ -1937,20 +1947,7 @@ def dispatch(command: str, args: argparse.Namespace) -> Any:
             },
         )
     else:
-        raise SystemExit(f"Unsupported command: {command}")
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-    result = dispatch(args.command, args)
-
-    if args.command == "library-audit" and args.format == "markdown":
-        _print_library_audit_markdown(result)
-        return
-    if args.command == "expired-documents" and args.format == "markdown":
-        _print_expired_documents_markdown(result)
-        return
+        raise SystemExit(f"Unsupported command: {args.command}")
 
     _print_json(result)
 

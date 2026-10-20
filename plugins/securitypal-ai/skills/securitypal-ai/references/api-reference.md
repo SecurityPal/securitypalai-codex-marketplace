@@ -4,6 +4,7 @@
 
 - Base URL: `https://app.securitypalhq.com/api`
 - Auth header: `Authorization: Bearer $SECURITYPAL_API_TOKEN`
+- Version header: `X-API-Version: 2026-08-07` (the helper script sends it on every request)
 - Override base URL with `SECURITYPAL_API_BASE_URL` if needed.
 - Endpoint paths below are normalized as `/v1/...`, so the full URL for `GET /v1/auth/me` is `https://app.securitypalhq.com/api/v1/auth/me`.
 
