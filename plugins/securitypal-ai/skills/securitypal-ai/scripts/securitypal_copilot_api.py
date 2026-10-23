@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 DEFAULT_BASE_URL = "https://app.securitypalhq.com/api"
-PUBLIC_API_VERSION = "2026-08-07"
+PUBLIC_API_VERSION = "2026-10-08"
 PUBLIC_API_VERSION_HEADER = "X-API-Version"
 DEFAULT_PAGE_LIMIT = 50
 MAX_MARKDOWN_EXAMPLES = 10
@@ -28,9 +28,7 @@ MAX_GAP_EXAMPLES = 5
 KNOWLEDGE_LIBRARY_RAG_FLAG = "knowledge-library-rag-based-enabled"
 SOURCE_MODEL_LEGACY = "legacy"
 SOURCE_MODEL_RAG = "rag"
-PUBLIC_DOCUMENT_UPLOAD_URL_PATH = (
-    "/v1/libraries/{library_id}/documents/request-upload-url"
-)
+PUBLIC_FILE_UPLOAD_URL_PATH = "/v1/files/request-upload-url"
 PUBLIC_DOCUMENT_FINALIZE_UPLOAD_PATH = (
     "/v1/libraries/{library_id}/documents/finalize-upload"
 )
@@ -294,13 +292,17 @@ def _document_expiration(
     }
 
 
-def _upload_file_to_signed_url(upload_url: str, file_path: str) -> None:
+def _upload_file_to_signed_url(
+    upload_url: str,
+    file_path: str,
+    upload_headers: dict[str, str],
+) -> None:
     with open(file_path, "rb") as file:
         request = urllib.request.Request(
             upload_url,
             method="PUT",
             data=file.read(),
-            headers={"Content-Type": "application/octet-stream"},
+            headers=upload_headers,
         )
     try:
         with urllib.request.urlopen(
@@ -442,10 +444,9 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
     me_response = _request("GET", "/v1/auth/me")
     capabilities = _build_kb_capabilities(me_response)
 
-    upload_url_path = PUBLIC_DOCUMENT_UPLOAD_URL_PATH.format(library_id=library_id)
     signed_url_response = _request(
         "POST",
-        upload_url_path,
+        PUBLIC_FILE_UPLOAD_URL_PATH,
         payload={
             "fileName": file_name,
         },
@@ -455,16 +456,18 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit("Expected signed upload response to contain a data object")
 
     upload_url = _extract_field(signed_upload, "upload_url")
-    gcs_file_name = _extract_field(signed_upload, "gcs_file_name")
+    upload_headers = _extract_field(signed_upload, "upload_headers")
+    file_ref = _extract_field(signed_upload, "file_ref")
     original_file_name = _extract_field(signed_upload, "file_name") or file_name
-    gcs_path = _extract_field(signed_upload, "gcs_path")
     if not isinstance(upload_url, str) or not upload_url:
         raise SystemExit("Signed upload response did not include uploadUrl")
-    if not isinstance(gcs_file_name, str) or not gcs_file_name:
-        raise SystemExit("Signed upload response did not include gcsFileName")
+    if not isinstance(upload_headers, dict):
+        raise SystemExit("Signed upload response did not include uploadHeaders")
+    if not isinstance(file_ref, str) or not file_ref:
+        raise SystemExit("Signed upload response did not include fileRef")
 
     try:
-        _upload_file_to_signed_url(upload_url, file_path)
+        _upload_file_to_signed_url(upload_url, file_path, upload_headers)
     except ApiRequestError as error:
         print(json.dumps(error.as_dict(), indent=2, sort_keys=True), file=sys.stderr)
         raise SystemExit(1) from error
@@ -474,9 +477,7 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
         "POST",
         finalize_path,
         payload={
-            "gcsFileName": gcs_file_name,
-            "originalFileName": original_file_name,
-            "gcsPath": gcs_path,
+            "fileRef": {"fileRef": file_ref, "fileName": original_file_name},
             "tagIds": args.tag_ids,
             "ownerUserIds": args.owner_user_ids,
             "reviewCycle": args.review_cycle,
@@ -508,8 +509,7 @@ def _build_add_document_result(args: argparse.Namespace) -> dict[str, Any]:
         "uploaded_file": {
             "path": file_path,
             "name": file_name,
-            "gcs_file_name": gcs_file_name,
-            "gcs_path": gcs_path,
+            "file_ref": file_ref,
         },
         "finalize_response": finalize_response,
         "finalized_document_ids": finalized_document_ids,

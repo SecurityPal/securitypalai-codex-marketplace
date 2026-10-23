@@ -174,8 +174,8 @@ python3 scripts/securitypal_copilot_api.py knowledge-gaps --library-id 123 --top
 
 Use `add-document` for "add this document" requests when the token can access document upload endpoints. The helper performs the three-step upload flow:
 
-1. `POST /v1/libraries/{library_id}/documents/request-upload-url`
-2. `PUT` the local file to the returned signed upload URL
+1. `POST /v1/files/request-upload-url`
+2. `PUT` the local file to the returned signed upload URL, sending every `uploadHeaders` entry
 3. `POST /v1/libraries/{library_id}/documents/finalize-upload`
 
 Example:
@@ -247,12 +247,14 @@ Use `delete-document` only after confirming the exact document ID:
 python3 scripts/securitypal_copilot_api.py delete-document --library-id 123 --document-id DOCUMENT_UUID
 ```
 
-## Multipart Endpoints
+## File Upload and Multipart Endpoints
 
-The helper script intentionally focuses on the JSON endpoints. For multipart endpoints, use `curl` or extend the script carefully:
+The helper script intentionally focuses on the JSON endpoints. For file-based endpoints, use `curl` or extend the script carefully:
 
-- `POST /v1/copilot/request-autocomplete`
-- `POST /v1/copilot/generate-selectors`
+- `POST /v1/files/request-upload-url`, then `POST /v1/copilot/autocomplete-requests` with the returned `fileRef` (JSON)
+- `POST /v1/concierge/questionnaire-tasks` and its finalize route (JSON; see the reference)
+- `POST /v1/copilot/request-autocomplete` (multipart; no flag required)
+- `POST /v1/copilot/generate-selectors` (multipart)
 
 The backend route prefix still uses `copilot` for compatibility; the user-facing product name is SecurityPal AI.
 

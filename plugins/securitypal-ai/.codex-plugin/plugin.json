@@ -1,6 +1,6 @@
 {
   "name": "securitypal-ai",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "SecurityPal AI workflows for customer Knowledge Library Q&A, audits, and document coverage checks.",
   "author": {
     "name": "SecurityPal",

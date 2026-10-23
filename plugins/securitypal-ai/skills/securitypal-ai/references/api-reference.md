@@ -4,7 +4,7 @@
 
 - Base URL: `https://app.securitypalhq.com/api`
 - Auth header: `Authorization: Bearer $SECURITYPAL_API_TOKEN`
-- Version header: `X-API-Version: 2026-08-07` (the helper script sends it on every request)
+- Version header: `X-API-Version: 2026-10-08` (the helper script sends it on every request)
 - Override base URL with `SECURITYPAL_API_BASE_URL` if needed.
 - Endpoint paths below are normalized as `/v1/...`, so the full URL for `GET /v1/auth/me` is `https://app.securitypalhq.com/api/v1/auth/me`.
 
@@ -73,14 +73,7 @@ For review-expiration work, prefer `expired-documents`. For topic coverage check
 
 ### Request signed document upload URLs
 
-- `POST /v1/libraries/{library_id}/documents/request-upload-url`
-- Body:
-
-```json
-{
-  "fileName": "policy.pdf"
-}
-```
+Document uploads use the shared `POST /v1/files/request-upload-url` route described under File Uploads below. `PUT` the file to the returned `uploadUrl` with every `uploadHeaders` entry, then pass the returned `fileRef` to finalize.
 
 ### Finalize document upload
 
@@ -89,9 +82,7 @@ For review-expiration work, prefer `expired-documents`. For topic coverage check
 
 ```json
 {
-  "gcsFileName": "uuid_policy.pdf",
-  "originalFileName": "policy.pdf",
-  "gcsPath": "temp/company/uuid_policy.pdf",
+  "fileRef": {"fileRef": "FILE_REF", "fileName": "policy.pdf"},
   "tagIds": ["optional-tag-uuid"],
   "ownerUserIds": [42],
   "reviewCycle": 12,
@@ -224,17 +215,72 @@ The helper calls `GET /v1/auth/me` first. Legacy reports document and Q/A librar
 ### Fetch autocomplete results
 
 - `GET /v1/copilot/request-autocomplete`
+- Returns results for a request created by `POST /v1/copilot/autocomplete-requests`
 - Query params:
   - `requestId` required
   - `productId` required
   - `offset` optional
   - `limit` optional
 
-## Multipart Endpoints
+## File Uploads
+
+Endpoints that take a file accept a `fileRef` from `POST /v1/files/request-upload-url` instead of multipart.
+
+### Request an upload URL
+
+- `POST /v1/files/request-upload-url`
+- Body: `{"fileName": "questionnaire.xlsx"}`
+- Response: `uploadUrl`, `uploadHeaders`, `fileRef`, `fileName`, `expiresAt`
+- Upload the raw bytes with `PUT` to `uploadUrl`, sending every header in `uploadHeaders` exactly as given.
+- Pass `{"fileRef": "...", "fileName": "..."}` to the endpoint that consumes the file. Treat `fileRef` as opaque; unused uploads are deleted after 5 days.
+
+```bash
+UPLOAD_RESPONSE="$(
+  curl --fail-with-body -X POST "$SECURITYPAL_API_BASE_URL/v1/files/request-upload-url" \
+    -H "Authorization: Bearer $SECURITYPAL_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"fileName": "questionnaire.xlsx"}'
+)"
+
+UPLOAD_URL="$(jq -r '.uploadUrl' <<<"$UPLOAD_RESPONSE")"
+mapfile -t UPLOAD_HEADER_ARGS < <(
+  jq -r '.uploadHeaders | to_entries[] | "--header", "\(.key): \(.value)"' <<<"$UPLOAD_RESPONSE"
+)
+
+curl --fail-with-body -X PUT "$UPLOAD_URL" \
+  "${UPLOAD_HEADER_ARGS[@]}" \
+  --data-binary @questionnaire.xlsx
+```
 
 ### Request autocomplete
 
+- `POST /v1/copilot/autocomplete-requests`
+- Required body fields: `libraryId`, `prospect`, `file` (`{fileRef, fileName}`)
+- Optional body fields: `instruction`, `tagIds`, `includeSources`, `includeLibrary`, `includeTags`, `sourceType`, `documentIds`, `instructionIds`
+- Response includes the request ID to pass to `GET /v1/copilot/request-autocomplete`.
+
+```bash
+curl -X POST "$SECURITYPAL_API_BASE_URL/v1/copilot/autocomplete-requests" \
+  -H "Authorization: Bearer $SECURITYPAL_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"libraryId": 123, "prospect": "Acme Corp", "instruction": "Answer in concise security-review language.", "includeSources": true, "file": {"fileRef": "FILE_REF", "fileName": "questionnaire.html"}}'
+```
+
+## Questionnaire Tasks
+
+Plural `/v1/concierge/questionnaire-tasks` routes are JSON-only. The singular `/v1/concierge/questionnaire-task` routes remain multipart.
+
+| Action | Route | Notes |
+| --- | --- | --- |
+| Create | `POST /v1/concierge/questionnaire-tasks` | Body: `prospect`, `libraryIds`, `sender` (JSON string), optional `portalInfo` (JSON string), `notes`, `requestedPriority`, `tagIds`, `annualRecurringRevenue`, `prospectDueDate`, `salesforceRecordId`, `assigneeId`, `files` (`[{fileRef, fileName}]`; required without `portalInfo`) |
+| Finalize | `POST /v1/concierge/questionnaire-tasks/{id}/finalize` | Body: `notes`, `files`, optional `skipFileUpload`; sets status to `revisedVersionReturned` |
+
+## Multipart Endpoints
+
+### Request autocomplete (legacy multipart)
+
 - `POST /v1/copilot/request-autocomplete`
+- Deprecated in favor of `POST /v1/copilot/autocomplete-requests`.
 - Content type: `multipart/form-data`
 - Required form fields:
   - `libraryId`
